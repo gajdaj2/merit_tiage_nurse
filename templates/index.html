@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ED Triage — Next-Best-Action</title>
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#1e293b; --panel2:#273449; --text:#e2e8f0;
+      --muted:#94a3b8; --line:#334155;
+      --lvl1:#ef4444; --lvl2:#f97316; --lvl3:#eab308; --lvl4:#22c55e; --lvl99:#64748b;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+           background:var(--bg); color:var(--text); }
+    header { padding:18px 28px; border-bottom:1px solid var(--line);
+             display:flex; align-items:center; gap:14px; }
+    header h1 { font-size:18px; margin:0; }
+    .badge { font-size:12px; background:var(--panel2); color:var(--muted);
+             padding:3px 9px; border-radius:999px; border:1px solid var(--line); }
+    .wrap { display:grid; grid-template-columns:320px 1fr; gap:22px; padding:24px 28px; }
+    .panel { background:var(--panel); border:1px solid var(--line);
+             border-radius:12px; padding:18px; margin-bottom:22px; }
+    .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+                color:var(--muted); margin:0 0 12px; }
+    textarea { width:100%; min-height:84px; resize:vertical; background:var(--bg);
+               color:var(--text); border:1px solid var(--line); border-radius:8px;
+               padding:10px; font:inherit; }
+    label.chk { display:flex; align-items:center; gap:8px; margin:10px 0;
+                color:var(--muted); font-size:13px; }
+    button { font:inherit; cursor:pointer; border:none; border-radius:8px;
+             padding:9px 14px; color:#fff; background:#2563eb; }
+    button.alt { background:var(--panel2); border:1px solid var(--line); }
+    button.ghost { background:transparent; border:1px solid var(--line); color:var(--muted); }
+    .row { display:flex; gap:8px; flex-wrap:wrap; }
+    .next { border-left:5px solid var(--lvl1); }
+    .next .who { font-size:13px; color:var(--muted); }
+    .next .what { font-size:17px; font-weight:600; margin-top:4px; }
+    table { width:100%; border-collapse:collapse; }
+    th { text-align:left; font-size:12px; color:var(--muted); font-weight:600;
+         padding:6px 8px; border-bottom:1px solid var(--line); }
+    td { padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+    tr:last-child td { border-bottom:none; }
+    .pill { display:inline-block; min-width:74px; text-align:center; font-size:12px;
+            font-weight:700; color:#0b1220; padding:3px 8px; border-radius:6px; }
+    .lvl1{background:var(--lvl1)} .lvl2{background:var(--lvl2)}
+    .lvl3{background:var(--lvl3)} .lvl4{background:var(--lvl4)}
+    .lvl99{background:var(--lvl99); color:#fff}
+    .id { color:var(--muted); font-size:12px; }
+    .muted { color:var(--muted); }
+    .empty { color:var(--muted); font-style:italic; padding:8px; }
+    .legend li { margin:5px 0; color:var(--muted); font-size:13px; list-style:none; }
+    .dot { display:inline-block; width:10px; height:10px; border-radius:3px;
+           margin-right:8px; vertical-align:middle; }
+    .err { color:#fca5a5; font-family:ui-monospace,monospace; font-size:12px; }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+    @media (max-width:900px){ .wrap{grid-template-columns:1fr} .grid2{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🏥 ED Triage — Next-Best-Action</h1>
+    <span class="badge">LLM: {{ mode }}</span>
+    <span class="badge">{{ queue|length }} in queue · {{ review|length }} review · {{ dead_letter|length }} dead-letter</span>
+  </header>
+
+  <div class="wrap">
+    <!-- LEFT: controls -->
+    <div>
+      <div class="panel">
+        <h2>New presentation</h2>
+        <form method="post" action="{{ url_for('add') }}">
+          <textarea name="text" placeholder="e.g. 65yo with sudden slurred speech and a drooping face for 20 min"></textarea>
+          <label class="chk"><input type="checkbox" name="immediate"> Immediate deadline (jumps within its level)</label>
+          <div class="row">
+            <button type="submit">Triage &amp; queue</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="panel">
+        <h2>Demo controls</h2>
+        <div class="row">
+          <form method="post" action="{{ url_for('generate') }}"><button class="alt" type="submit">Generate batch</button></form>
+          <form method="post" action="{{ url_for('reset') }}"><button class="ghost" type="submit">Reset</button></form>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Acuity schema</h2>
+        <ul class="legend" style="padding:0;margin:0">
+          {% for p in schema %}
+          <li><span class="dot {{ level_class.get(p.level,'lvl99') }}"></span><b>{{ p.level }} · {{ p.priority_name }}</b></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <!-- RIGHT: queue + sinks -->
+    <div>
+      <div class="panel next">
+        <h2>See next</h2>
+        {% if next_item %}
+          <div class="who">{{ next_item.item.id }} · {{ next_item.item.source }} ·
+            <span class="pill {{ level_class.get(next_item.triage.level,'lvl99') }}">L{{ next_item.triage.level }} {{ name_for(next_item.triage.level) }}</span>
+          </div>
+          <div class="what">{{ next_item.triage.required_action }}</div>
+          <form method="post" action="{{ url_for('next_item') }}" style="margin-top:12px">
+            <button type="submit">✓ Seen — remove &amp; show next</button>
+          </form>
+        {% else %}
+          <div class="empty">Queue is empty.</div>
+        {% endif %}
+      </div>
+
+      <div class="panel">
+        <h2>Live priority queue</h2>
+        {% if queue %}
+        <table>
+          <tr><th>Priority</th><th>Patient</th><th>Action</th><th>Conf.</th></tr>
+          {% for e in queue %}
+          <tr>
+            <td><span class="pill {{ level_class.get(e.triage.level,'lvl99') }}">L{{ e.triage.level }} {{ name_for(e.triage.level) }}</span></td>
+            <td><span class="id">{{ e.item.id }}</span><br>{{ e.triage.category }}{% if e.item.deadline %} <span class="muted">⏱</span>{% endif %}</td>
+            <td>{{ e.triage.required_action }}</td>
+            <td class="muted">{{ '%.2f'|format(e.triage.confidence) }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+          <div class="empty">Nothing queued.</div>
+        {% endif %}
+      </div>
+
+      <div class="grid2">
+        <div class="panel">
+          <h2>⚠ Review queue <span class="muted">(ambiguous / low-confidence)</span></h2>
+          {% if review %}
+            {% for e in review %}
+            <div style="padding:8px 0;border-bottom:1px solid var(--line)">
+              <span class="id">{{ e.item.id }}</span>
+              <span class="pill {{ level_class.get(e.triage.level,'lvl99') }}">L{{ e.triage.level }} {{ name_for(e.triage.level) }}</span>
+              <span class="muted">conf {{ '%.2f'|format(e.triage.confidence) }}{% if e.triage.second_choice_level %} · alt L{{ e.triage.second_choice_level }}{% endif %}</span>
+              <div class="muted" style="margin-top:4px">{{ e.triage.reasoning }}</div>
+            </div>
+            {% endfor %}
+          {% else %}<div class="empty">None.</div>{% endif %}
+        </div>
+
+        <div class="panel">
+          <h2>💀 Dead-letter <span class="muted">(malformed / failed)</span></h2>
+          {% if dead_letter %}
+            {% for id, err in dead_letter %}
+            <div style="padding:8px 0;border-bottom:1px solid var(--line)">
+              <span class="id">{{ id }}</span>
+              <div class="err">{{ err }}</div>
+            </div>
+            {% endfor %}
+          {% else %}<div class="empty">None.</div>{% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
