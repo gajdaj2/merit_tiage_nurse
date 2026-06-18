@@ -22,6 +22,11 @@ real model (gpt-4o-mini). With no key it falls back to a deterministic mock LLM,
 so the whole pipeline runs offline and reproducibly in either front-end. See
 [Web UI](#web-ui) below for the browser version.
 
+## Repo hygiene
+
+- `.gitignore` excludes local environments, caches, and editor artifacts.
+- `.env` is ignored; keep secrets local and commit only `.env.example`.
+
 ## The use case & schema
 
 ED triage acuity, level 1 = most urgent (`schema.py`):
